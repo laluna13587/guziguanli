@@ -25,6 +25,8 @@ IMAGE_DIR = os.path.join(os.path.dirname(__file__), "order_images")
 # 密码哈希：当前密码为 admin123
 # 修改密码方法：python -c "import hashlib; print(hashlib.sha256('新密码'.encode()).hexdigest())"
 ADMIN_PASSWORD_HASH = hashlib.sha256("admin123".encode()).hexdigest()
+# 页面刷新后自动恢复管理员登录状态所用的会话令牌
+ADMIN_SESSION_TOKEN = hashlib.sha256((ADMIN_PASSWORD_HASH + "_tok_v1").encode()).hexdigest()[:32]
 
 COLUMNS = [
     "订单号", "买家昵称", "商品名称", "款式规格",
@@ -81,6 +83,18 @@ def check_password(raw: str) -> bool:
     )
 
 
+@st.dialog("⏳ 数据更新中", width="small")
+def processing_dialog(execute_fn) -> None:
+    """阻塞式处理对话框：显示更新提示，执行数据操作，然后自动刷新页面。"""
+    st.markdown(
+        "**数据正在更新中，请耐心等待。**\n\n"
+        "十分钟后仍未自动跳转请刷新页面。"
+    )
+    with st.spinner("处理中..."):
+        execute_fn()
+    st.rerun()
+
+
 @st.dialog("🖼 订单图片管理", width="large")
 def image_dialog(order_id: str, buyer: str, item: str, df: pd.DataFrame) -> None:
     """弹出对话框：查看 / 上传 / 删除指定订单的图片。"""
@@ -91,9 +105,14 @@ def image_dialog(order_id: str, buyer: str, item: str, df: pd.DataFrame) -> None
         st.write(f"当前已有 **{len(imgs)}** 张图片")
         for i, img_path in enumerate(imgs):
             with st.expander(f"图片 {i+1}", expanded=False):
-                    os.remove(img_path)
-                    df.loc[df["订单号"] == order_id, "图片"] = image_count_label(order_id)
-                    save_data(df)
+                st.image(img_path, use_container_width=True)
+                if st.button("🗑 删除此图", key=f"dlg_del_{i}"):
+                    with st.spinner("删除中..."):
+                        os.remove(img_path)
+                        st.session_state.df.loc[
+                            st.session_state.df["订单号"] == order_id, "图片"
+                        ] = image_count_label(order_id)
+                        save_data(st.session_state.df)
                     st.rerun()
     else:
         st.info("该订单暂无图片")
@@ -107,10 +126,13 @@ def image_dialog(order_id: str, buyer: str, item: str, df: pd.DataFrame) -> None
     )
     if uploaded:
         if st.button("✅ 保存图片", key="dlg_img_save"):
-            for f in uploaded:
-                save_order_image(order_id, f)
-            df.loc[df["订单号"] == order_id, "图片"] = image_count_label(order_id)
-            save_data(df)
+            with st.spinner("上传中..."):
+                for f in uploaded:
+                    save_order_image(order_id, f)
+                st.session_state.df.loc[
+                    st.session_state.df["订单号"] == order_id, "图片"
+                ] = image_count_label(order_id)
+                save_data(st.session_state.df)
             st.success(f"已上传 {len(uploaded)} 张图片。")
             st.rerun()
 
@@ -156,12 +178,17 @@ def sidebar_auth() -> bool:
     渲染侧边栏登录区，返回是否为管理员。
     密码正确后状态存入 session_state，刷新页面不需重新输入。
     """
+    # 从 query_params 自动恢复登录状态（支持浏览器刷新后不重新登录）
+    if st.query_params.get("ak") == ADMIN_SESSION_TOKEN:
+        st.session_state.is_admin = True
+
     with st.sidebar:
         st.title("🔐 管理员登录")
         if st.session_state.get("is_admin"):
             st.success("✅ 已登录为管理员")
             if st.button("退出登录", use_container_width=True):
                 st.session_state.is_admin = False
+                st.query_params.pop("ak", None)
                 st.rerun()
             return True
 
@@ -169,6 +196,7 @@ def sidebar_auth() -> bool:
         if st.button("登录", use_container_width=True):
             if check_password(pwd):
                 st.session_state.is_admin = True
+                st.query_params["ak"] = ADMIN_SESSION_TOKEN
                 st.rerun()
             else:
                 st.error("密码错误")
@@ -301,10 +329,15 @@ def page_input(df: pd.DataFrame) -> pd.DataFrame:
                         "录入时间":  now,
                         "图片":      "",
                     })
-                df = pd.concat([df, pd.DataFrame(new_rows)], ignore_index=True)
-                save_data(df)
-                st.success(f"✅ 已成功导入 {len(new_rows)} 条订单！")
-                st.rerun()
+
+                def _do_import():
+                    df_new = pd.concat(
+                        [st.session_state.df, pd.DataFrame(new_rows)], ignore_index=True
+                    )
+                    save_data(df_new)
+                    st.session_state.df = df_new
+
+                processing_dialog(_do_import)
 
     return df
 
@@ -381,14 +414,13 @@ def page_admin(df: pd.DataFrame) -> pd.DataFrame:
     col_save, col_export = st.columns(2)
     with col_save:
         if st.button("💾 保存行内编辑", use_container_width=True):
-            df.update(edited)
-            # 根据数量和单价重算总价
-            qty_num   = pd.to_numeric(df["数量"],    errors="coerce").fillna(0)
-            price_num = pd.to_numeric(df["单价(元)"], errors="coerce").fillna(0)
-            df["总价(元)"] = (qty_num * price_num).round(2).astype(str)
-            save_data(df)
-            st.success("已保存。")
-            st.rerun()
+            def _do_save():
+                st.session_state.df.update(edited)
+                qty_num   = pd.to_numeric(st.session_state.df["数量"],    errors="coerce").fillna(0)
+                price_num = pd.to_numeric(st.session_state.df["单价(元)"], errors="coerce").fillna(0)
+                st.session_state.df["总价(元)"] = (qty_num * price_num).round(2).astype(str)
+                save_data(st.session_state.df)
+            processing_dialog(_do_save)
     with col_export:
         st.download_button(
             label="📥 导出当前视图 Excel",
@@ -405,10 +437,13 @@ def page_admin(df: pd.DataFrame) -> pd.DataFrame:
         del_id = st.text_input("订单号", key="del_input", placeholder="输入订单号后点删除")
         if st.button("删除该订单", key="del_single"):
             if del_id.strip() in df["订单号"].values:
-                df = df[df["订单号"] != del_id.strip()].reset_index(drop=True)
-                save_data(df)
-                st.success(f"已删除订单 {del_id.strip()}")
-                st.rerun()
+                _del_id = del_id.strip()
+                def _do_del():
+                    st.session_state.df = st.session_state.df[
+                        st.session_state.df["订单号"] != _del_id
+                    ].reset_index(drop=True)
+                    save_data(st.session_state.df)
+                processing_dialog(_do_del)
             else:
                 st.warning("未找到该订单号。")
 
@@ -512,21 +547,29 @@ def page_batch(df: pd.DataFrame) -> pd.DataFrame:
         bulk_pay = st.selectbox("批量设置付款状态", ["（不修改）"] + PAY_STATUS_OPTIONS, key="bp_bulk_pay")
         if st.button("✅ 应用付款状态", key="bp_apply_pay", use_container_width=True):
             if bulk_pay != "（不修改）":
-                df.loc[df["订单号"].isin(selected_ids), "付款状态"] = bulk_pay
-                save_data(df)
-                st.success(f"已将 {len(selected_ids)} 条订单付款状态更新为「{bulk_pay}」")
-                st.session_state.bp_ver += 1
-                st.rerun()
+                _pay = bulk_pay
+                _ids = list(selected_ids)
+                def _do_pay():
+                    st.session_state.df.loc[
+                        st.session_state.df["订单号"].isin(_ids), "付款状态"
+                    ] = _pay
+                    save_data(st.session_state.df)
+                    st.session_state.bp_ver += 1
+                processing_dialog(_do_pay)
 
     with bc2:
         bulk_ship = st.selectbox("批量设置发货状态", ["（不修改）"] + SHIP_STATUS_OPTIONS, key="bp_bulk_ship")
         if st.button("✅ 应用发货状态", key="bp_apply_ship", use_container_width=True):
             if bulk_ship != "（不修改）":
-                df.loc[df["订单号"].isin(selected_ids), "发货状态"] = bulk_ship
-                save_data(df)
-                st.success(f"已将 {len(selected_ids)} 条订单发货状态更新为「{bulk_ship}」")
-                st.session_state.bp_ver += 1
-                st.rerun()
+                _ship = bulk_ship
+                _ids  = list(selected_ids)
+                def _do_ship():
+                    st.session_state.df.loc[
+                        st.session_state.df["订单号"].isin(_ids), "发货状态"
+                    ] = _ship
+                    save_data(st.session_state.df)
+                    st.session_state.bp_ver += 1
+                processing_dialog(_do_ship)
 
     with bc3:
         st.markdown("**批量删除**")
@@ -536,11 +579,14 @@ def page_batch(df: pd.DataFrame) -> pd.DataFrame:
             use_container_width=True,
             type="primary",
         ):
-            df = df[~df["订单号"].isin(selected_ids)].reset_index(drop=True)
-            save_data(df)
-            st.success(f"已删除 {len(selected_ids)} 条订单。")
-            st.session_state.bp_ver += 1
-            st.rerun()
+            _ids = list(selected_ids)
+            def _do_bulk_del():
+                st.session_state.df = st.session_state.df[
+                    ~st.session_state.df["订单号"].isin(_ids)
+                ].reset_index(drop=True)
+                save_data(st.session_state.df)
+                st.session_state.bp_ver += 1
+            processing_dialog(_do_bulk_del)
 
     return df
 
