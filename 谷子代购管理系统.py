@@ -522,7 +522,8 @@ def page_batch(df: pd.DataFrame) -> pd.DataFrame:
             st.rerun()
 
     # ── 带复选框的只读表格 ───────────────────────────────────────────────────
-    view_sel = view.copy()
+    view_sel = view.copy().reset_index(drop=True)
+    view_sel.index = view_sel.index + 1  # 序号从 1 开始
     view_sel.insert(0, "选择", bool(st.session_state.bp_presel))
 
     checked = st.data_editor(
