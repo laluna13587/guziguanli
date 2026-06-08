@@ -19,6 +19,7 @@ from io import BytesIO
 # ── 常量配置 ──────────────────────────────────────────────────────────────────
 
 DATA_FILE = os.path.join(os.path.dirname(__file__), "orders_data.xlsx")
+IMAGE_DIR = os.path.join(os.path.dirname(__file__), "order_images")
 
 # 密码哈希：当前密码为 admin123
 # 修改密码方法：python -c "import hashlib; print(hashlib.sha256('新密码'.encode()).hexdigest())"
@@ -27,7 +28,7 @@ ADMIN_PASSWORD_HASH = hashlib.sha256("admin123".encode()).hexdigest()
 COLUMNS = [
     "订单号", "买家昵称", "商品名称", "款式规格",
     "数量", "单价(元)", "总价(元)",
-    "付款状态", "批次", "发货状态", "备注", "录入时间",
+    "付款状态", "发货状态", "备注", "录入时间", "图片",
 ]
 
 PAY_STATUS_OPTIONS  = ["未付款", "已付定金", "已付全款", "尾款待付"]
@@ -123,7 +124,6 @@ def page_input(df: pd.DataFrame) -> pd.DataFrame:
         with col2:
             unit_price = st.number_input("单价（元）", min_value=0.0, value=0.0, step=0.5, format="%.2f")
             pay_status = st.selectbox("付款状态", PAY_STATUS_OPTIONS)
-            batch      = st.text_input("批次（如：第1批）", value="第1批")
             note       = st.text_input("备注")
 
         submitted = st.form_submit_button("✅ 提交订单", use_container_width=True)
@@ -143,10 +143,10 @@ def page_input(df: pd.DataFrame) -> pd.DataFrame:
             "单价(元)":  str(unit_price),
             "总价(元)":  str(total_price),
             "付款状态":  pay_status,
-            "批次":      batch.strip(),
             "发货状态":  "待发货",
             "备注":      note.strip(),
             "录入时间":  datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "图片":      "",
         }
         df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
         save_data(df)
@@ -164,26 +164,30 @@ def page_admin(df: pd.DataFrame) -> pd.DataFrame:
         st.info("暂无订单数据。")
         return df
 
-    # 筛选栏
+    # ── 筛选栏 ──────────────────────────────────────────────────────────────
     col1, col2, col3 = st.columns(3)
     with col1:
-        filter_batch    = st.selectbox("按批次筛选", ["全部"] + sorted(df["批次"].dropna().unique().tolist()))
+        filter_pay  = st.selectbox("付款状态", ["全部"] + PAY_STATUS_OPTIONS, key="adm_f_pay")
     with col2:
-        filter_pay      = st.selectbox("付款状态", ["全部"] + PAY_STATUS_OPTIONS)
+        filter_ship = st.selectbox("发货状态", ["全部"] + SHIP_STATUS_OPTIONS, key="adm_f_ship")
     with col3:
-        filter_ship     = st.selectbox("发货状态", ["全部"] + SHIP_STATUS_OPTIONS)
+        filter_kw   = st.text_input("关键词", placeholder="买家昵称 / 商品名称", key="adm_f_kw")
 
     view = df.copy()
-    if filter_batch != "全部":
-        view = view[view["批次"] == filter_batch]
     if filter_pay != "全部":
         view = view[view["付款状态"] == filter_pay]
     if filter_ship != "全部":
         view = view[view["发货状态"] == filter_ship]
+    if filter_kw.strip():
+        kw = filter_kw.strip()
+        view = view[
+            view["买家昵称"].str.contains(kw, case=False, na=False) |
+            view["商品名称"].str.contains(kw, case=False, na=False)
+        ]
 
     st.caption(f"共 {len(view)} 条订单")
 
-    # 可编辑表格（更新付款/发货状态）
+    # ── 可编辑表格 ──────────────────────────────────────────────────────────
     edited = st.data_editor(
         view,
         column_config={
@@ -192,30 +196,16 @@ def page_admin(df: pd.DataFrame) -> pd.DataFrame:
         },
         use_container_width=True,
         num_rows="fixed",
-        key="admin_table",
+        key="adm_tbl",
     )
 
-    col_save, col_del, col_export = st.columns(3)
-
+    # ── 保存行内编辑 & 导出 ─────────────────────────────────────────────────
+    col_save, col_export = st.columns(2)
     with col_save:
-        if st.button("💾 保存更改", use_container_width=True):
-            # 将编辑后的行覆盖回原始 DataFrame
+        if st.button("💾 保存行内编辑", use_container_width=True):
             df.update(edited)
             save_data(df)
             st.success("已保存。")
-
-    with col_del:
-        del_id = st.text_input("输入要删除的订单号", key="del_input", label_visibility="collapsed",
-                               placeholder="输入订单号后点删除")
-        if st.button("🗑 删除该订单", use_container_width=True):
-            if del_id.strip() in df["订单号"].values:
-                df = df[df["订单号"] != del_id.strip()].reset_index(drop=True)
-                save_data(df)
-                st.success(f"已删除订单 {del_id.strip()}")
-                st.rerun()
-            else:
-                st.warning("未找到该订单号。")
-
     with col_export:
         st.download_button(
             label="📥 导出当前视图 Excel",
@@ -224,6 +214,186 @@ def page_admin(df: pd.DataFrame) -> pd.DataFrame:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
+
+    st.divider()
+
+    # ── 单条删除 ────────────────────────────────────────────────────────────
+    with st.expander("🗑 按订单号删除单条"):
+        del_id = st.text_input("订单号", key="del_input", placeholder="输入订单号后点删除")
+        if st.button("删除该订单", key="del_single"):
+            if del_id.strip() in df["订单号"].values:
+                df = df[df["订单号"] != del_id.strip()].reset_index(drop=True)
+                save_data(df)
+                st.success(f"已删除订单 {del_id.strip()}")
+                st.rerun()
+            else:
+                st.warning("未找到该订单号。")
+
+    # ── 图片管理 ───────────────────────────────────────────────────────────
+    with st.expander("🖼 订单图片管理"):
+        order_ids = df["订单号"].tolist()
+        sel_oid = st.selectbox("选择订单", order_ids, key="img_sel_order",
+                               format_func=lambda oid: f"{oid}  《{df.loc[df['订单号']==oid, '买家昵称'].values[0]}》  {df.loc[df['订单号']==oid, '商品名称'].values[0]}")
+        if sel_oid:
+            imgs = list_order_images(sel_oid)
+            if imgs:
+                st.caption(f"当前已有 {len(imgs)} 张图片")
+                for i, img_path in enumerate(imgs):
+                    fname = os.path.basename(img_path)
+                    with st.expander(f"图片 {i+1}：{fname}", expanded=False):
+                        st.image(img_path, use_container_width=True)
+                        if st.button("🗑 删除此图", key=f"del_img_{i}"):
+                            os.remove(img_path)
+                            df.loc[df["订单号"] == sel_oid, "图片"] = image_count_label(sel_oid)
+                            save_data(df)
+                            st.rerun()
+            else:
+                st.caption("暂无图片")
+
+            uploaded = st.file_uploader(
+                "上传图片（支持 jpg / png / gif / webp）",
+                type=["jpg", "jpeg", "png", "gif", "webp"],
+                accept_multiple_files=True,
+                key=f"img_upload_{sel_oid}",
+            )
+            if uploaded:
+                if st.button("✅ 保存图片", key="img_save"):
+                    for f in uploaded:
+                        save_order_image(sel_oid, f)
+                    df.loc[df["订单号"] == sel_oid, "图片"] = image_count_label(sel_oid)
+                    save_data(df)
+                    st.success(f"已上传 {len(uploaded)} 张图片。")
+                    st.rerun()
+
+    return df
+
+
+# ── 页面：批量操作（管理员） ─────────────────────────────────────────────────
+
+def page_batch(df: pd.DataFrame) -> pd.DataFrame:
+    st.header("⚡ 批量操作")
+    st.caption("先用筛选条件缩小范围，再全选或逐条勾选，最后执行批量动作。")
+
+    if df.empty:
+        st.info("暂无订单数据。")
+        return df
+
+    # ── 筛选栏 ──────────────────────────────────────────────────────────────
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        bp_pay  = st.selectbox("付款状态", ["全部"] + PAY_STATUS_OPTIONS, key="bp_f_pay")
+    with col2:
+        bp_ship = st.selectbox("发货状态", ["全部"] + SHIP_STATUS_OPTIONS, key="bp_f_ship")
+    with col3:
+        bp_kw   = st.text_input("关键词", placeholder="买家昵称 / 商品名称", key="bp_f_kw")
+
+    view = df.copy()
+    if bp_pay != "全部":
+        view = view[view["付款状态"] == bp_pay]
+    if bp_ship != "全部":
+        view = view[view["发货状态"] == bp_ship]
+    if bp_kw.strip():
+        kw = bp_kw.strip()
+        view = view[
+            view["买家昵称"].str.contains(kw, case=False, na=False) |
+            view["商品名称"].str.contains(kw, case=False, na=False)
+        ]
+
+    st.caption(f"筛选结果：{len(view)} 条")
+
+    # ── Session state 初始化 ────────────────────────────────────────────────
+    if "bp_ver" not in st.session_state:
+        st.session_state.bp_ver    = 0
+    if "bp_presel" not in st.session_state:
+        st.session_state.bp_presel = False
+    if "bp_fsig" not in st.session_state:
+        st.session_state.bp_fsig   = None
+
+    # 筛选条件变化时重置表格
+    fsig = (bp_pay, bp_ship, bp_kw.strip())
+    if st.session_state.bp_fsig != fsig:
+        st.session_state.bp_fsig   = fsig
+        st.session_state.bp_presel = False
+        st.session_state.bp_ver   += 1
+
+    # ── 全选 / 取消全选 ──────────────────────────────────────────────────────
+    c_all, c_none, c_cnt = st.columns([1, 1, 4])
+    with c_all:
+        if st.button("☑ 全选筛选结果", use_container_width=True, key="bp_selall"):
+            st.session_state.bp_presel = True
+            st.session_state.bp_ver   += 1
+            st.rerun()
+    with c_none:
+        if st.button("☐ 取消全选", use_container_width=True, key="bp_selnone"):
+            st.session_state.bp_presel = False
+            st.session_state.bp_ver   += 1
+            st.rerun()
+
+    # ── 带复选框的只读表格 ───────────────────────────────────────────────────
+    view_sel = view.copy()
+    view_sel.insert(0, "选择", bool(st.session_state.bp_presel))
+
+    checked = st.data_editor(
+        view_sel,
+        column_config={
+            "选择": st.column_config.CheckboxColumn("✓", default=False),
+        },
+        disabled=[c for c in view_sel.columns if c != "选择"],
+        use_container_width=True,
+        num_rows="fixed",
+        key=f"bp_tbl_{st.session_state.bp_ver}",
+    )
+
+    if st.session_state.bp_presel:
+        st.session_state.bp_presel = False
+
+    selected_ids = checked[checked["选择"] == True]["订单号"].tolist()
+    c_cnt.caption(f"已选中 **{len(selected_ids)}** 条")
+
+    st.divider()
+
+    # ── 批量操作区 ───────────────────────────────────────────────────────────
+    st.subheader("执行批量操作")
+    if not selected_ids:
+        st.info("请先勾选订单。")
+        return df
+
+    st.caption(f"将对已选中的 **{len(selected_ids)}** 条订单执行以下操作")
+    bc1, bc2, bc3 = st.columns(3)
+
+    with bc1:
+        bulk_pay = st.selectbox("批量设置付款状态", ["（不修改）"] + PAY_STATUS_OPTIONS, key="bp_bulk_pay")
+        if st.button("✅ 应用付款状态", key="bp_apply_pay", use_container_width=True):
+            if bulk_pay != "（不修改）":
+                df.loc[df["订单号"].isin(selected_ids), "付款状态"] = bulk_pay
+                save_data(df)
+                st.success(f"已将 {len(selected_ids)} 条订单付款状态更新为「{bulk_pay}」")
+                st.session_state.bp_ver += 1
+                st.rerun()
+
+    with bc2:
+        bulk_ship = st.selectbox("批量设置发货状态", ["（不修改）"] + SHIP_STATUS_OPTIONS, key="bp_bulk_ship")
+        if st.button("✅ 应用发货状态", key="bp_apply_ship", use_container_width=True):
+            if bulk_ship != "（不修改）":
+                df.loc[df["订单号"].isin(selected_ids), "发货状态"] = bulk_ship
+                save_data(df)
+                st.success(f"已将 {len(selected_ids)} 条订单发货状态更新为「{bulk_ship}」")
+                st.session_state.bp_ver += 1
+                st.rerun()
+
+    with bc3:
+        st.markdown("**批量删除**")
+        if st.button(
+            f"🗑 删除已选 {len(selected_ids)} 条",
+            key="bp_bulk_del",
+            use_container_width=True,
+            type="primary",
+        ):
+            df = df[~df["订单号"].isin(selected_ids)].reset_index(drop=True)
+            save_data(df)
+            st.success(f"已删除 {len(selected_ids)} 条订单。")
+            st.session_state.bp_ver += 1
+            st.rerun()
 
     return df
 
@@ -246,9 +416,19 @@ def page_query(df: pd.DataFrame) -> None:
         if result.empty:
             st.warning("😢 没有找到相关订单，请确认昵称/订单号是否正确。")
         else:
-            SHOW_COLS = ["订单号", "商品名称", "款式规格", "数量", "总价(元)", "付款状态", "批次", "发货状态", "备注"]
+            SHOW_COLS = ["订单号", "商品名称", "款式规格", "数量", "总价(元)", "付款状态", "发货状态", "备注"]
             st.success(f"找到 {len(result)} 条订单：")
             st.dataframe(result[SHOW_COLS], use_container_width=True, hide_index=True)
+
+            # 展示各订单图片
+            for _, row in result.iterrows():
+                imgs = list_order_images(row["订单号"])
+                if imgs:
+                    with st.expander(f"🖼 {row['订单号']} — {row['商品名称']}  图片（{len(imgs)}张）"):
+                        for i, img_path in enumerate(imgs):
+                            fname = os.path.basename(img_path)
+                            with st.expander(f"图片 {i+1}：{fname}", expanded=False):
+                                st.image(img_path, use_container_width=True)
 
     st.divider()
     st.markdown(
@@ -261,61 +441,6 @@ def page_query(df: pd.DataFrame) -> None:
         "- 待发货 → 货物未出\n"
         "- 已发货 → 请查收快递通知\n"
         "- 已签收 → 完成 🎉"
-    )
-
-
-# ── 页面：排发清单 ───────────────────────────────────────────────────────────
-
-def page_dispatch(df: pd.DataFrame) -> None:
-    st.header("🚚 排发清单")
-
-    if df.empty:
-        st.info("暂无订单数据。")
-        return
-
-    batches = sorted(df["批次"].dropna().unique().tolist())
-    if not batches:
-        st.info("尚未设置批次。")
-        return
-
-    selected_batch = st.selectbox("选择发货批次", batches)
-    batch_df = df[df["批次"] == selected_batch].copy()
-
-    # 统计卡片
-    total_orders  = len(batch_df)
-    paid_orders   = len(batch_df[batch_df["付款状态"] == "已付全款"])
-    unpaid_orders = total_orders - paid_orders
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("本批订单总数", total_orders)
-    c2.metric("已付全款",     paid_orders)
-    c3.metric("未全款（待确认）", unpaid_orders, delta_color="inverse")
-
-    st.divider()
-
-    # 按商品汇总表（用于备货核查）
-    st.subheader("📦 商品备货汇总")
-    summary = (
-        batch_df.groupby(["商品名称", "款式规格"])
-        .agg(总数量=("数量", lambda x: sum(pd.to_numeric(x, errors="coerce").fillna(0)))  )
-        .reset_index()
-    )
-    st.dataframe(summary, use_container_width=True, hide_index=True)
-
-    st.divider()
-
-    # 逐单发货明细
-    st.subheader("📋 逐单发货明细")
-    DISPATCH_COLS = ["订单号", "买家昵称", "商品名称", "款式规格", "数量", "付款状态", "发货状态", "备注"]
-    st.dataframe(batch_df[DISPATCH_COLS], use_container_width=True, hide_index=True)
-
-    # 导出发货单
-    st.download_button(
-        label=f"📥 导出「{selected_batch}」发货单 Excel",
-        data=df_to_excel_bytes(batch_df[DISPATCH_COLS]),
-        file_name=f"排发单_{selected_batch}_{datetime.now().strftime('%Y%m%d')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
     )
 
 
@@ -362,15 +487,15 @@ def main() -> None:
     if is_admin:
         # 管理员：全部 4 个 Tab
         st.caption("当前身份：**管理员**")
-        tabs = st.tabs(["📋 录入订单", "🗂 订单总表", "🔍 买家查询", "🚚 排发清单"])
+        tabs = st.tabs(["📋 录入订单", "🗂 订单总表", "⚡ 批量操作", "🔍 买家查询"])
         with tabs[0]:
             st.session_state.df = page_input(st.session_state.df)
         with tabs[1]:
             st.session_state.df = page_admin(st.session_state.df)
         with tabs[2]:
-            page_query(st.session_state.df)
+            st.session_state.df = page_batch(st.session_state.df)
         with tabs[3]:
-            page_dispatch(st.session_state.df)
+            page_query(st.session_state.df)
     else:
         # 买家：仅查询
         st.caption("买家视图 · 如需管理请在左侧登录")
