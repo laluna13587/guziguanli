@@ -8,6 +8,7 @@
 """
 
 import hashlib
+import hmac
 import streamlit as st
 import pandas as pd
 import os
@@ -72,7 +73,7 @@ def df_to_excel_bytes(df: pd.DataFrame) -> bytes:
 
 def check_password(raw: str) -> bool:
     """对比输入密码与存储哈希，使用恒定时间比较防止时序攻击。"""
-    return hashlib.compare_digest(
+    return hmac.compare_digest(
         hashlib.sha256(raw.encode()).hexdigest(),
         ADMIN_PASSWORD_HASH,
     )
@@ -322,12 +323,12 @@ def page_dispatch(df: pd.DataFrame) -> None:
 
 def main() -> None:
     st.set_page_config(
-        page_title="谷子代购管理系统",
+        page_title="自助查询排发系统",
         page_icon="🎁",
         layout="wide",
     )
 
-    st.title("🎁 谷子代购 · 打表排发自助系统")
+    st.title("🎁 自助查询排发系统")
 
     is_admin = sidebar_auth()
 
