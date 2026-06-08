@@ -181,8 +181,7 @@ def sidebar_auth() -> bool:
 # ── 页面：录入订单（仅管理员） ────────────────────────────────────────────────
 
 # Excel 批量导入的列（不含订单号、录入时间、图片，这三列自动填充）
-IMPORT_COLUMNS = ["买家昵称", "商品名称", "款式规格", "数量", "单价(元)", "总价(元)",
-                  "付款状态", "发货状态", "备注"]
+IMPORT_COLUMNS = ["买家昵称", "商品名称", "款式规格", "数量", "单价(元)", "备注"]
 
 
 def make_import_template() -> bytes:
@@ -295,9 +294,9 @@ def page_input(df: pd.DataFrame) -> pd.DataFrame:
                         "款式规格":  row.get("款式规格", "").strip(),
                         "数量":      row.get("数量", "").strip(),
                         "单价(元)":  row.get("单价(元)", "").strip(),
-                        "总价(元)":  row.get("总价(元)", "").strip(),
-                        "付款状态":  row.get("付款状态", PAY_STATUS_OPTIONS[0]).strip() or PAY_STATUS_OPTIONS[0],
-                        "发货状态":  row.get("发货状态", "待发货").strip() or "待发货",
+                        "总价(元)":  "",
+                        "付款状态":  PAY_STATUS_OPTIONS[0],
+                        "发货状态":  "待发货",
                         "备注":      row.get("备注", "").strip(),
                         "录入时间":  now,
                         "图片":      "",
