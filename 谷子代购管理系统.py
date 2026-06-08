@@ -503,7 +503,7 @@ def main() -> None:
         <style>
         @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;600&display=swap');
 
-        body, p, span, div, label, button, input, textarea, select,
+        body, p, div, label, input, textarea, select,
         .stMarkdown, .stCaption, .stText, .stHeading,
         [data-testid="stHeadingWithActionElements"],
         [data-testid="stHeadingWithActionElements"] * {
@@ -515,9 +515,14 @@ def main() -> None:
         [data-testid="stHeadingWithActionElements"] * {
             font-weight: 600 !important;
         }
-        p, span, div, label, button,
+        p, div, label,
         .stMarkdown, .stCaption, .stText {
             font-weight: 400 !important;
+        }
+        /* 恢复 Streamlit 图标字体，防止图标名称以文字显示 */
+        span[class*="material-symbols"] {
+            font-family: "Material Symbols Rounded", "Material Symbols Sharp",
+                         "Material Symbols Outlined" !important;
         }
         </style>
         """,
