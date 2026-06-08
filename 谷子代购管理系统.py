@@ -348,11 +348,34 @@ def page_admin(df: pd.DataFrame) -> pd.DataFrame:
         column_config={
             "付款状态": st.column_config.SelectboxColumn(options=PAY_STATUS_OPTIONS),
             "发货状态": st.column_config.SelectboxColumn(options=SHIP_STATUS_OPTIONS),
+            "图片": st.column_config.TextColumn("📎 图片", disabled=True),
         },
         use_container_width=True,
         num_rows="fixed",
         key="adm_tbl",
     )
+
+    # ── 图片操作条（紧贴表格，视觉上对应最右侧图片列） ──────────────────────
+    if not view.empty:
+        order_options = {
+            oid: f"{buyer}　{item}" + (f"　[{image_count_label(oid)}]" if image_count_label(oid) else "")
+            for oid, buyer, item in zip(
+                view["订单号"], view["买家昵称"], view["商品名称"]
+            )
+        }
+        ic1, ic2 = st.columns([5, 1])
+        with ic1:
+            sel_oid = st.selectbox(
+                "选择要管理图片的订单",
+                options=list(order_options.keys()),
+                format_func=lambda k: order_options[k],
+                label_visibility="collapsed",
+                key="adm_img_sel",
+            )
+        with ic2:
+            if st.button("📎 管理图片", key="adm_img_open", use_container_width=True):
+                row = df[df["订单号"] == sel_oid].iloc[0]
+                image_dialog(sel_oid, row["买家昵称"], row["商品名称"], df)
 
     # ── 保存行内编辑 & 导出 ─────────────────────────────────────────────────
     col_save, col_export = st.columns(2)
@@ -383,19 +406,6 @@ def page_admin(df: pd.DataFrame) -> pd.DataFrame:
                 st.rerun()
             else:
                 st.warning("未找到该订单号。")
-
-    # ── 图片上传（每条订单旁的按钮触发对话框） ──────────────────────────────
-    st.divider()
-    st.subheader("🖼 图片管理")
-    st.caption("点击订单右侧的按钮上传或查看图片。")
-    for _, row in df.iterrows():
-        oid   = row["订单号"]
-        buyer = row["买家昵称"]
-        item  = row["商品名称"]
-        label = image_count_label(oid)
-        btn_label = f"📎 {buyer}　{item}" + (f"　[{label}]" if label else "")
-        if st.button(btn_label, key=f"img_btn_{oid}", use_container_width=True):
-            image_dialog(oid, buyer, item, df)
 
     return df
 
