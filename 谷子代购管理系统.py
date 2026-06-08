@@ -180,46 +180,132 @@ def sidebar_auth() -> bool:
 
 # ── 页面：录入订单（仅管理员） ────────────────────────────────────────────────
 
+# Excel 批量导入的列（不含订单号、录入时间、图片，这三列自动填充）
+IMPORT_COLUMNS = ["买家昵称", "商品名称", "款式规格", "数量", "单价(元)", "总价(元)",
+                  "付款状态", "发货状态", "备注"]
+
+
+def make_import_template() -> bytes:
+    """生成空白导入模板 Excel（列顺序与 IMPORT_COLUMNS 一致）。"""
+    tpl = pd.DataFrame(columns=IMPORT_COLUMNS)
+    buf = BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        tpl.to_excel(writer, index=False, sheet_name="导入模板")
+    return buf.getvalue()
+
+
 def page_input(df: pd.DataFrame) -> pd.DataFrame:
     st.header("📋 录入订单")
 
-    with st.form("order_form", clear_on_submit=True):
-        col1, col2 = st.columns(2)
-        with col1:
-            nickname   = st.text_input("买家昵称 *")
-            item_name  = st.text_input("商品名称 *")
-            item_spec  = st.text_input("款式 / 规格（如：A款-白）")
-            qty        = st.number_input("数量", min_value=1, value=1, step=1)
-        with col2:
-            unit_price = st.number_input("单价（元）", min_value=0.0, value=0.0, step=0.5, format="%.2f")
-            pay_status = st.selectbox("付款状态", PAY_STATUS_OPTIONS)
-            note       = st.text_input("备注")
+    tab_single, tab_bulk = st.tabs(["✏️ 逐条录入", "📂 Excel 批量导入"])
 
-        submitted = st.form_submit_button("✅ 提交订单", use_container_width=True)
+    # ── 逐条录入 ────────────────────────────────────────────────────────────
+    with tab_single:
+        with st.form("order_form", clear_on_submit=True):
+            col1, col2 = st.columns(2)
+            with col1:
+                nickname   = st.text_input("买家昵称 *")
+                item_name  = st.text_input("商品名称 *")
+                item_spec  = st.text_input("款式 / 规格（如：A款-白）")
+                qty        = st.number_input("数量", min_value=1, value=1, step=1)
+            with col2:
+                unit_price = st.number_input("单价（元）", min_value=0.0, value=0.0, step=0.5, format="%.2f")
+                pay_status = st.selectbox("付款状态", PAY_STATUS_OPTIONS)
+                note       = st.text_input("备注")
 
-    if submitted:
-        if not nickname.strip() or not item_name.strip():
-            st.warning("买家昵称和商品名称为必填项。")
-            return df
+            submitted = st.form_submit_button("✅ 提交订单", use_container_width=True)
 
-        total_price = round(float(qty) * unit_price, 2)
-        new_row = {
-            "订单号":    generate_order_id(),
-            "买家昵称":  nickname.strip(),
-            "商品名称":  item_name.strip(),
-            "款式规格":  item_spec.strip(),
-            "数量":      str(qty),
-            "单价(元)":  str(unit_price),
-            "总价(元)":  str(total_price),
-            "付款状态":  pay_status,
-            "发货状态":  "待发货",
-            "备注":      note.strip(),
-            "录入时间":  datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "图片":      "",
-        }
-        df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-        save_data(df)
-        st.success(f"✅ 订单已录入！订单号：{new_row['订单号']}")
+        if submitted:
+            if not nickname.strip() or not item_name.strip():
+                st.warning("买家昵称和商品名称为必填项。")
+                return df
+
+            total_price = round(float(qty) * unit_price, 2)
+            new_row = {
+                "订单号":    generate_order_id(),
+                "买家昵称":  nickname.strip(),
+                "商品名称":  item_name.strip(),
+                "款式规格":  item_spec.strip(),
+                "数量":      str(qty),
+                "单价(元)":  str(unit_price),
+                "总价(元)":  str(total_price),
+                "付款状态":  pay_status,
+                "发货状态":  "待发货",
+                "备注":      note.strip(),
+                "录入时间":  datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "图片":      "",
+            }
+            df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+            save_data(df)
+            st.success(f"✅ 订单已录入！订单号：{new_row['订单号']}")
+
+    # ── Excel 批量导入 ───────────────────────────────────────────────────────
+    with tab_bulk:
+        st.caption("请下载模板，按格式填写后上传。订单号与录入时间将自动生成，无需填写。")
+
+        st.download_button(
+            label="⬇️ 下载导入模板",
+            data=make_import_template(),
+            file_name="订单导入模板.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+        uploaded_xl = st.file_uploader(
+            "上传填好的 Excel 文件",
+            type=["xlsx", "xls"],
+            key="bulk_import_file",
+        )
+
+        if uploaded_xl:
+            try:
+                imp = pd.read_excel(uploaded_xl, dtype=str).fillna("")
+            except Exception as e:
+                st.error(f"文件读取失败：{e}")
+                return df
+
+            # 检查必要列
+            missing = [c for c in ["买家昵称", "商品名称"] if c not in imp.columns]
+            if missing:
+                st.error(f"文件缺少必要列：{missing}，请使用下载的模板。")
+                return df
+
+            # 补全缺失的可选列
+            for col in IMPORT_COLUMNS:
+                if col not in imp.columns:
+                    imp[col] = ""
+
+            # 过滤空行（买家昵称或商品名称为空）
+            imp = imp[imp["买家昵称"].str.strip().ne("") & imp["商品名称"].str.strip().ne("")]
+
+            if imp.empty:
+                st.warning("文件中没有有效数据行（买家昵称和商品名称不能为空）。")
+                return df
+
+            st.write(f"识别到 **{len(imp)}** 条有效数据，预览如下：")
+            st.dataframe(imp[IMPORT_COLUMNS], use_container_width=True, hide_index=True)
+
+            if st.button("✅ 确认导入", key="confirm_bulk_import", use_container_width=True):
+                now = datetime.now().strftime("%Y-%m-%d %H:%M")
+                new_rows = []
+                for _, row in imp.iterrows():
+                    new_rows.append({
+                        "订单号":    generate_order_id(),
+                        "买家昵称":  row.get("买家昵称", "").strip(),
+                        "商品名称":  row.get("商品名称", "").strip(),
+                        "款式规格":  row.get("款式规格", "").strip(),
+                        "数量":      row.get("数量", "").strip(),
+                        "单价(元)":  row.get("单价(元)", "").strip(),
+                        "总价(元)":  row.get("总价(元)", "").strip(),
+                        "付款状态":  row.get("付款状态", PAY_STATUS_OPTIONS[0]).strip() or PAY_STATUS_OPTIONS[0],
+                        "发货状态":  row.get("发货状态", "待发货").strip() or "待发货",
+                        "备注":      row.get("备注", "").strip(),
+                        "录入时间":  now,
+                        "图片":      "",
+                    })
+                df = pd.concat([df, pd.DataFrame(new_rows)], ignore_index=True)
+                save_data(df)
+                st.success(f"✅ 已成功导入 {len(new_rows)} 条订单！")
+                st.rerun()
 
     return df
 
