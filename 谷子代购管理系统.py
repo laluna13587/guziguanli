@@ -347,6 +347,7 @@ def page_admin(df: pd.DataFrame) -> pd.DataFrame:
         column_config={
             "付款状态": st.column_config.SelectboxColumn(options=PAY_STATUS_OPTIONS),
             "发货状态": st.column_config.SelectboxColumn(options=SHIP_STATUS_OPTIONS),
+            "总价(元)": st.column_config.TextColumn("总价(元)", disabled=True),
             "图片": st.column_config.TextColumn("📎 图片", disabled=True),
         },
         use_container_width=True,
@@ -381,8 +382,13 @@ def page_admin(df: pd.DataFrame) -> pd.DataFrame:
     with col_save:
         if st.button("💾 保存行内编辑", use_container_width=True):
             df.update(edited)
+            # 根据数量和单价重算总价
+            qty_num   = pd.to_numeric(df["数量"],    errors="coerce").fillna(0)
+            price_num = pd.to_numeric(df["单价(元)"], errors="coerce").fillna(0)
+            df["总价(元)"] = (qty_num * price_num).round(2).astype(str)
             save_data(df)
             st.success("已保存。")
+            st.rerun()
     with col_export:
         st.download_button(
             label="📥 导出当前视图 Excel",
