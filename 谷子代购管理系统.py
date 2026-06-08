@@ -524,6 +524,19 @@ def main() -> None:
             font-family: "Material Symbols Rounded", "Material Symbols Sharp",
                          "Material Symbols Outlined" !important;
         }
+        /* 侧边栏折叠按钮：隐藏图标，显示「管理员入口」文字 */
+        [data-testid="stSidebarCollapsedControl"] button span {
+            display: none !important;
+        }
+        [data-testid="stSidebarCollapsedControl"] button::after {
+            content: "管理员入口";
+            font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif !important;
+            font-size: 12px;
+            font-weight: 600;
+            writing-mode: vertical-rl;
+            letter-spacing: 3px;
+            color: #555;
+        }
         </style>
         """,
         unsafe_allow_html=True,
