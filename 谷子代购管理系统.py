@@ -328,6 +328,23 @@ def main() -> None:
         layout="wide",
     )
 
+    # 统一中文字体，消除粗细不一的问题
+    st.markdown(
+        """
+        <style>
+        html, body, [class*="css"] {
+            font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC",
+                         "Source Han Sans CN", sans-serif !important;
+            font-weight: 400 !important;
+        }
+        h1, h2, h3 {
+            font-weight: 600 !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     st.title("🎁 自助查询排发系统")
 
     is_admin = sidebar_auth()
