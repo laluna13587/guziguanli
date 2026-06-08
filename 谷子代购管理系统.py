@@ -332,13 +332,20 @@ def main() -> None:
     st.markdown(
         """
         <style>
-        html, body, [class*="css"] {
-            font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC",
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;600&display=swap');
+
+        * {
+            font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei",
                          "Source Han Sans CN", sans-serif !important;
-            font-weight: 400 !important;
         }
-        h1, h2, h3 {
+        h1, h2, h3, h4, h5, h6,
+        .stHeading, [data-testid="stHeadingWithActionElements"],
+        [data-testid="stHeadingWithActionElements"] * {
             font-weight: 600 !important;
+        }
+        p, span, div, label, button,
+        .stMarkdown, .stCaption, .stText {
+            font-weight: 400 !important;
         }
         </style>
         """,
