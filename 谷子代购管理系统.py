@@ -14,7 +14,14 @@ import streamlit.components.v1
 import pandas as pd
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+_BJT = timezone(timedelta(hours=8))  # 北京时间 UTC+8
+
+
+def now_bjt() -> datetime:
+    """返回当前北京时间。"""
+    return datetime.now(_BJT)
 from io import BytesIO
 
 # ── 常量配置 ──────────────────────────────────────────────────────────────────
@@ -61,8 +68,8 @@ def save_data(df: pd.DataFrame) -> None:
 
 
 def generate_order_id() -> str:
-    """生成唯一订单号，格式：ORD-YYYYMMDD-XXXXXX"""
-    date_str  = datetime.now().strftime("%Y%m%d")
+    """生成唯一订单号，格式：ORD-YYYYMMDD-XXXXXX（日期取北京时间）"""
+    date_str  = now_bjt().strftime("%Y%m%d")
     short_uid = str(uuid.uuid4())[:6].upper()
     return f"ORD-{date_str}-{short_uid}"
 
@@ -259,7 +266,7 @@ def page_input(df: pd.DataFrame) -> pd.DataFrame:
                 "付款状态":  pay_status,
                 "发货状态":  "待发货",
                 "备注":      note.strip(),
-                "录入时间":  datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "录入时间":  now_bjt().strftime("%Y-%m-%d %H:%M") + " (北京时间)",
                 "图片":      "",
             }
             df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
@@ -312,7 +319,7 @@ def page_input(df: pd.DataFrame) -> pd.DataFrame:
             st.dataframe(imp[IMPORT_COLUMNS], use_container_width=True, hide_index=True)
 
             if st.button("✅ 确认导入", key="confirm_bulk_import", use_container_width=True):
-                now = datetime.now().strftime("%Y-%m-%d %H:%M")
+                now = now_bjt().strftime("%Y-%m-%d %H:%M") + " (北京时间)"
                 new_rows = []
                 for _, row in imp.iterrows():
                     new_rows.append({
@@ -322,7 +329,10 @@ def page_input(df: pd.DataFrame) -> pd.DataFrame:
                         "款式规格":  row.get("款式规格", "").strip(),
                         "数量":      row.get("数量", "").strip(),
                         "单价(元)":  row.get("单价(元)", "").strip(),
-                        "总价(元)":  "",
+                        "总价(元)":  str(round(
+                            float(row.get("数量", "") or 0) *
+                            float(row.get("单价(元)", "") or 0), 2
+                        )) if row.get("数量", "").strip() and row.get("单价(元)", "").strip() else "",
                         "付款状态":  PAY_STATUS_OPTIONS[0],
                         "发货状态":  "待发货",
                         "备注":      row.get("备注", "").strip(),
@@ -425,7 +435,7 @@ def page_admin(df: pd.DataFrame) -> pd.DataFrame:
         st.download_button(
             label="📥 导出当前视图 Excel",
             data=df_to_excel_bytes(view),
-            file_name=f"订单表_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+            file_name=f"订单表_{now_bjt().strftime('%Y%m%d_%H%M')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
