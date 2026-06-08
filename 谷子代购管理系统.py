@@ -502,9 +502,11 @@ def main() -> None:
         """
         <style>
         @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;600&display=swap');
-        @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,0,0&display=swap');
 
-        * {
+        body, p, span, div, label, button, input, textarea, select,
+        .stMarkdown, .stCaption, .stText, .stHeading,
+        [data-testid="stHeadingWithActionElements"],
+        [data-testid="stHeadingWithActionElements"] * {
             font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei",
                          "Source Han Sans CN", sans-serif !important;
         }
