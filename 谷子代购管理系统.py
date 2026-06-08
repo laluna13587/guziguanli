@@ -10,6 +10,7 @@
 import hashlib
 import hmac
 import streamlit as st
+import streamlit.components.v1
 import pandas as pd
 import os
 import uuid
@@ -525,9 +526,11 @@ def main() -> None:
                          "Material Symbols Outlined" !important;
         }
         /* 侧边栏折叠按钮：隐藏图标，显示「管理员入口」文字 */
+        [data-testid="collapsedControl"] button span,
         [data-testid="stSidebarCollapsedControl"] button span {
             display: none !important;
         }
+        [data-testid="collapsedControl"] button::after,
         [data-testid="stSidebarCollapsedControl"] button::after {
             content: "管理员入口";
             font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif !important;
@@ -540,6 +543,34 @@ def main() -> None:
         </style>
         """,
         unsafe_allow_html=True,
+    )
+
+    # JS 兜底：直接找到侧边栏折叠按钮，替换其文字内容
+    st.components.v1.html(
+        """
+        <script>
+        function patchSidebarBtn() {
+            const btns = parent.document.querySelectorAll(
+                '[data-testid="collapsedControl"] button, [data-testid="stSidebarCollapsedControl"] button'
+            );
+            btns.forEach(btn => {
+                const span = btn.querySelector('span');
+                if (span) { span.textContent = ''; span.style.display = 'none'; }
+                if (!btn.dataset.patched) {
+                    btn.dataset.patched = '1';
+                    const label = document.createElement('span');
+                    label.textContent = '管理员入口';
+                    label.style.cssText = 'font-size:12px;writing-mode:vertical-rl;letter-spacing:3px;color:#555;font-weight:600;';
+                    btn.appendChild(label);
+                }
+            });
+        }
+        // 页面加载后 + 1 秒后各执行一次，确保 Streamlit 渲染完毕
+        patchSidebarBtn();
+        setTimeout(patchSidebarBtn, 1000);
+        </script>
+        """,
+        height=0,
     )
 
     st.title("🎁 自助查询排发系统")
