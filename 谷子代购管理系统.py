@@ -80,6 +80,40 @@ def check_password(raw: str) -> bool:
     )
 
 
+@st.dialog("🖼 订单图片管理", width="large")
+def image_dialog(order_id: str, buyer: str, item: str, df: pd.DataFrame) -> None:
+    """弹出对话框：查看 / 上传 / 删除指定订单的图片。"""
+    st.caption(f"订单号：{order_id}　买家：{buyer}　商品：{item}")
+    imgs = list_order_images(order_id)
+
+    if imgs:
+        st.write(f"当前已有 **{len(imgs)}** 张图片")
+        for i, img_path in enumerate(imgs):
+            with st.expander(f"图片 {i+1}", expanded=False):
+                    os.remove(img_path)
+                    df.loc[df["订单号"] == order_id, "图片"] = image_count_label(order_id)
+                    save_data(df)
+                    st.rerun()
+    else:
+        st.info("该订单暂无图片")
+
+    st.divider()
+    uploaded = st.file_uploader(
+        "上传新图片（支持 jpg / png / gif / webp，可多选）",
+        type=["jpg", "jpeg", "png", "gif", "webp"],
+        accept_multiple_files=True,
+        key=f"dlg_upload_{order_id}",
+    )
+    if uploaded:
+        if st.button("✅ 保存图片", key="dlg_img_save"):
+            for f in uploaded:
+                save_order_image(order_id, f)
+            df.loc[df["订单号"] == order_id, "图片"] = image_count_label(order_id)
+            save_data(df)
+            st.success(f"已上传 {len(uploaded)} 张图片。")
+            st.rerun()
+
+
 def list_order_images(order_id: str) -> list:
     """返回该订单在 IMAGE_DIR 中所有图片的完整路径列表（按文件名排序）。"""
     if not os.path.isdir(IMAGE_DIR):
@@ -263,41 +297,18 @@ def page_admin(df: pd.DataFrame) -> pd.DataFrame:
             else:
                 st.warning("未找到该订单号。")
 
-    # ── 图片管理 ───────────────────────────────────────────────────────────
-    with st.expander("🖼 订单图片管理"):
-        order_ids = df["订单号"].tolist()
-        sel_oid = st.selectbox("选择订单", order_ids, key="img_sel_order",
-                               format_func=lambda oid: f"{oid}  《{df.loc[df['订单号']==oid, '买家昵称'].values[0]}》  {df.loc[df['订单号']==oid, '商品名称'].values[0]}")
-        if sel_oid:
-            imgs = list_order_images(sel_oid)
-            if imgs:
-                st.caption(f"当前已有 {len(imgs)} 张图片")
-                for i, img_path in enumerate(imgs):
-                    fname = os.path.basename(img_path)
-                    with st.expander(f"图片 {i+1}：{fname}", expanded=False):
-                        st.image(img_path, use_container_width=True)
-                        if st.button("🗑 删除此图", key=f"del_img_{i}"):
-                            os.remove(img_path)
-                            df.loc[df["订单号"] == sel_oid, "图片"] = image_count_label(sel_oid)
-                            save_data(df)
-                            st.rerun()
-            else:
-                st.caption("暂无图片")
-
-            uploaded = st.file_uploader(
-                "上传图片（支持 jpg / png / gif / webp）",
-                type=["jpg", "jpeg", "png", "gif", "webp"],
-                accept_multiple_files=True,
-                key=f"img_upload_{sel_oid}",
-            )
-            if uploaded:
-                if st.button("✅ 保存图片", key="img_save"):
-                    for f in uploaded:
-                        save_order_image(sel_oid, f)
-                    df.loc[df["订单号"] == sel_oid, "图片"] = image_count_label(sel_oid)
-                    save_data(df)
-                    st.success(f"已上传 {len(uploaded)} 张图片。")
-                    st.rerun()
+    # ── 图片上传（每条订单旁的按钮触发对话框） ──────────────────────────────
+    st.divider()
+    st.subheader("🖼 图片管理")
+    st.caption("点击订单右侧的按钮上传或查看图片。")
+    for _, row in df.iterrows():
+        oid   = row["订单号"]
+        buyer = row["买家昵称"]
+        item  = row["商品名称"]
+        label = image_count_label(oid)
+        btn_label = f"📎 {buyer}　{item}" + (f"　[{label}]" if label else "")
+        if st.button(btn_label, key=f"img_btn_{oid}", use_container_width=True):
+            image_dialog(oid, buyer, item, df)
 
     return df
 
@@ -460,8 +471,7 @@ def page_query(df: pd.DataFrame) -> None:
                 if imgs:
                     with st.expander(f"🖼 {row['订单号']} — {row['商品名称']}  图片（{len(imgs)}张）"):
                         for i, img_path in enumerate(imgs):
-                            fname = os.path.basename(img_path)
-                            with st.expander(f"图片 {i+1}：{fname}", expanded=False):
+                            with st.expander(f"图片 {i+1}", expanded=False):
                                 st.image(img_path, use_container_width=True)
 
     st.divider()
@@ -492,6 +502,7 @@ def main() -> None:
         """
         <style>
         @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;600&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,0,0&display=swap');
 
         * {
             font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei",
