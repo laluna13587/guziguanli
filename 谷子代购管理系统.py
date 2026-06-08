@@ -80,6 +80,40 @@ def check_password(raw: str) -> bool:
     )
 
 
+def list_order_images(order_id: str) -> list:
+    """返回该订单在 IMAGE_DIR 中所有图片的完整路径列表（按文件名排序）。"""
+    if not os.path.isdir(IMAGE_DIR):
+        return []
+    prefix = order_id + "_"
+    return sorted(
+        os.path.join(IMAGE_DIR, f)
+        for f in os.listdir(IMAGE_DIR)
+        if f.startswith(prefix)
+    )
+
+
+def save_order_image(order_id: str, uploaded_file) -> str:
+    """将上传的图片保存到 IMAGE_DIR，返回保存的完整路径。"""
+    os.makedirs(IMAGE_DIR, exist_ok=True)
+    existing = list_order_images(order_id)
+    idx = len(existing) + 1
+    ext = os.path.splitext(uploaded_file.name)[-1].lower() or ".jpg"
+    # 限制扩展名，防止意外文件类型
+    if ext not in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
+        ext = ".jpg"
+    filename = f"{order_id}_{idx:03d}{ext}"
+    dest = os.path.join(IMAGE_DIR, filename)
+    with open(dest, "wb") as f:
+        f.write(uploaded_file.getbuffer())
+    return dest
+
+
+def image_count_label(order_id: str) -> str:
+    """返回订单图片数的显示文字，无图片时返回空字符串。"""
+    n = len(list_order_images(order_id))
+    return f"{n}张" if n else ""
+
+
 # ── 侧边栏：身份验证 ──────────────────────────────────────────────────────────
 
 def sidebar_auth() -> bool:
