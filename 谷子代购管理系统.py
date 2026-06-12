@@ -495,36 +495,41 @@ def page_batch(df: pd.DataFrame) -> pd.DataFrame:
 
     # ── Session state 初始化 ────────────────────────────────────────────────
     if "bp_ver" not in st.session_state:
-        st.session_state.bp_ver    = 0
+        st.session_state.bp_ver          = 0
     if "bp_presel" not in st.session_state:
-        st.session_state.bp_presel = False
+        st.session_state.bp_presel       = False
     if "bp_fsig" not in st.session_state:
-        st.session_state.bp_fsig   = None
+        st.session_state.bp_fsig         = None
+    if "bp_selected_ids" not in st.session_state:
+        st.session_state.bp_selected_ids = []
 
     # 筛选条件变化时重置表格
     fsig = (bp_pay, bp_ship, bp_kw.strip())
     if st.session_state.bp_fsig != fsig:
-        st.session_state.bp_fsig   = fsig
-        st.session_state.bp_presel = False
-        st.session_state.bp_ver   += 1
+        st.session_state.bp_fsig         = fsig
+        st.session_state.bp_presel       = False
+        st.session_state.bp_selected_ids = []
+        st.session_state.bp_ver         += 1
 
     # ── 全选 / 取消全选 ──────────────────────────────────────────────────────
     c_all, c_none, c_cnt = st.columns([1, 1, 4])
     with c_all:
         if st.button("☑ 全选筛选结果", use_container_width=True, key="bp_selall"):
-            st.session_state.bp_presel = True
-            st.session_state.bp_ver   += 1
+            st.session_state.bp_presel       = True
+            st.session_state.bp_selected_ids = view["订单号"].tolist()
+            st.session_state.bp_ver         += 1
             st.rerun()
     with c_none:
         if st.button("☐ 取消全选", use_container_width=True, key="bp_selnone"):
-            st.session_state.bp_presel = False
-            st.session_state.bp_ver   += 1
+            st.session_state.bp_presel       = False
+            st.session_state.bp_selected_ids = []
+            st.session_state.bp_ver         += 1
             st.rerun()
 
     # ── 带复选框的只读表格 ───────────────────────────────────────────────────
     view_sel = view.copy().reset_index(drop=True)
     view_sel.index = view_sel.index + 1  # 序号从 1 开始
-    view_sel.insert(0, "选择", bool(st.session_state.bp_presel))
+    view_sel.insert(0, "选择", view_sel["订单号"].isin(st.session_state.bp_selected_ids))
 
     checked = st.data_editor(
         view_sel,
@@ -541,6 +546,7 @@ def page_batch(df: pd.DataFrame) -> pd.DataFrame:
         st.session_state.bp_presel = False
 
     selected_ids = checked[checked["选择"] == True]["订单号"].tolist()
+    st.session_state.bp_selected_ids = selected_ids
     c_cnt.caption(f"已选中 **{len(selected_ids)}** 条")
 
     st.divider()
