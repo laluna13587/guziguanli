@@ -9,12 +9,18 @@
 
 import hashlib
 import hmac
-import streamlit as st
-import streamlit.components.v1
-import pandas as pd
 import os
 import uuid
 from datetime import datetime, timezone, timedelta
+from io import BytesIO
+
+import streamlit as st
+import streamlit.components.v1
+import pandas as pd
+import gspread
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
 
 _BJT = timezone(timedelta(hours=8))  # 北京时间 UTC+8
 
@@ -22,12 +28,17 @@ _BJT = timezone(timedelta(hours=8))  # 北京时间 UTC+8
 def now_bjt() -> datetime:
     """返回当前北京时间。"""
     return datetime.now(_BJT)
-from io import BytesIO
 
 # ── 常量配置 ──────────────────────────────────────────────────────────────────
 
-DATA_FILE = os.path.join(os.path.dirname(__file__), "orders_data.xlsx")
-IMAGE_DIR = os.path.join(os.path.dirname(__file__), "order_images")
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
+ORDERS_SHEET_NAME = "订单数据"
+IMAGES_SHEET_NAME = "图片索引"
+DRIVE_FOLDER_NAME = "谷子代购订单图片"
+IMAGE_COLS = ["订单号", "图片ID", "文件名"]
 
 # 密码哈希：当前密码为 admin123
 # 修改密码方法：python -c "import hashlib; print(hashlib.sha256('新密码'.encode()).hexdigest())"
@@ -45,26 +56,114 @@ PAY_STATUS_OPTIONS  = ["未付款", "已付定金", "已付全款"]
 SHIP_STATUS_OPTIONS = ["已下单", "可国内排发", "可国际排发", "已排发"]
 
 
+# ── Google 认证与工作表访问 ──────────────────────────────────────────────────
+
+@st.cache_resource
+def _get_credentials():
+    """从 Streamlit Secrets 加载 Google Service Account 凭据。"""
+    return Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"],
+        scopes=SCOPES,
+    )
+
+
+@st.cache_resource
+def _get_gspread_client():
+    """返回已认证的 gspread 客户端（全局缓存）。"""
+    return gspread.authorize(_get_credentials())
+
+
+@st.cache_resource
+def _get_drive_service():
+    """返回已认证的 Google Drive API 服务对象（全局缓存）。"""
+    return build("drive", "v3", credentials=_get_credentials(), cache_discovery=False)
+
+
+def _get_orders_ws():
+    """获取订单数据工作表，不存在时自动创建。"""
+    gc = _get_gspread_client()
+    sh = gc.open_by_key(st.secrets["sheets"]["spreadsheet_id"])
+    try:
+        return sh.worksheet(ORDERS_SHEET_NAME)
+    except gspread.exceptions.WorksheetNotFound:
+        ws = sh.add_worksheet(ORDERS_SHEET_NAME, rows=2000, cols=len(COLUMNS))
+        ws.append_row(COLUMNS)
+        return ws
+
+
+def _get_images_ws():
+    """获取图片索引工作表，不存在时自动创建。"""
+    gc = _get_gspread_client()
+    sh = gc.open_by_key(st.secrets["sheets"]["spreadsheet_id"])
+    try:
+        return sh.worksheet(IMAGES_SHEET_NAME)
+    except gspread.exceptions.WorksheetNotFound:
+        ws = sh.add_worksheet(IMAGES_SHEET_NAME, rows=5000, cols=len(IMAGE_COLS))
+        ws.append_row(IMAGE_COLS)
+        return ws
+
+
+@st.cache_data(ttl=86400)
+def _get_drive_folder_id() -> str:
+    """获取（或自动创建）Google Drive 图片存储文件夹的 ID（每天缓存一次）。"""
+    service = _get_drive_service()
+    q = (
+        f"name='{DRIVE_FOLDER_NAME}' and "
+        "mimeType='application/vnd.google-apps.folder' and trashed=false"
+    )
+    results = service.files().list(q=q, fields="files(id)").execute()
+    files = results.get("files", [])
+    if files:
+        return files[0]["id"]
+    metadata = {
+        "name": DRIVE_FOLDER_NAME,
+        "mimeType": "application/vnd.google-apps.folder",
+    }
+    folder = service.files().create(body=metadata, fields="id").execute()
+    return folder["id"]
+
+
+def _load_all_image_records() -> list:
+    """加载所有图片索引记录，结果缓存在 session_state 中避免重复 API 请求。"""
+    if "image_records_cache" not in st.session_state:
+        try:
+            ws = _get_images_ws()
+            st.session_state.image_records_cache = ws.get_all_records()
+        except Exception:
+            st.session_state.image_records_cache = []
+    return st.session_state.image_records_cache
+
+
+def _invalidate_image_cache() -> None:
+    """清除图片索引缓存，下次访问时重新从 Sheet 加载。"""
+    st.session_state.pop("image_records_cache", None)
+
+
 # ── 数据层 ────────────────────────────────────────────────────────────────────
 
 def load_data() -> pd.DataFrame:
-    """从 Excel 加载全量订单数据，文件不存在时返回空表。"""
-    if os.path.exists(DATA_FILE):
-        try:
-            df = pd.read_excel(DATA_FILE, dtype=str)
-            # 补全缺少的列，防止旧版本文件结构不匹配
-            for col in COLUMNS:
-                if col not in df.columns:
-                    df[col] = ""
-            return df[COLUMNS]
-        except Exception:
-            st.error("数据文件损坏，已重置为空表。")
-    return pd.DataFrame(columns=COLUMNS)
+    """从 Google Sheets 加载全量订单数据，失败时返回空表。"""
+    try:
+        ws = _get_orders_ws()
+        records = ws.get_all_records()
+        if not records:
+            return pd.DataFrame(columns=COLUMNS)
+        df = pd.DataFrame(records, dtype=str).fillna("")
+        for col in COLUMNS:
+            if col not in df.columns:
+                df[col] = ""
+        return df[COLUMNS]
+    except Exception as e:
+        st.error(f"数据加载失败：{e}")
+        return pd.DataFrame(columns=COLUMNS)
 
 
 def save_data(df: pd.DataFrame) -> None:
-    """将 DataFrame 保存到 Excel。"""
-    df.to_excel(DATA_FILE, index=False)
+    """将 DataFrame 写入 Google Sheets（清空后全量覆盖）。"""
+    ws = _get_orders_ws()
+    ws.clear()
+    rows = [COLUMNS] + df[COLUMNS].fillna("").astype(str).values.tolist()
+    ws.update(rows)
 
 
 def generate_order_id() -> str:
@@ -110,12 +209,15 @@ def image_dialog(order_id: str, buyer: str, item: str, df: pd.DataFrame) -> None
 
     if imgs:
         st.write(f"当前已有 **{len(imgs)}** 张图片")
-        for i, img_path in enumerate(imgs):
+        for i, img_info in enumerate(imgs):
             with st.expander(f"图片 {i+1}", expanded=False):
-                st.image(img_path, use_container_width=True)
+                try:
+                    st.image(get_image_bytes(img_info["id"]), use_container_width=True)
+                except Exception as e:
+                    st.warning(f"图片加载失败：{e}")
                 if st.button("🗑 删除此图", key=f"dlg_del_{i}"):
                     with st.spinner("删除中..."):
-                        os.remove(img_path)
+                        delete_order_image(order_id, img_info["id"])
                         st.session_state.df.loc[
                             st.session_state.df["订单号"] == order_id, "图片"
                         ] = image_count_label(order_id)
@@ -145,31 +247,70 @@ def image_dialog(order_id: str, buyer: str, item: str, df: pd.DataFrame) -> None
 
 
 def list_order_images(order_id: str) -> list:
-    """返回该订单在 IMAGE_DIR 中所有图片的完整路径列表（按文件名排序）。"""
-    if not os.path.isdir(IMAGE_DIR):
-        return []
-    prefix = order_id + "_"
-    return sorted(
-        os.path.join(IMAGE_DIR, f)
-        for f in os.listdir(IMAGE_DIR)
-        if f.startswith(prefix)
-    )
+    """返回该订单的图片列表，每项为 {'id': Drive文件ID, 'name': 文件名}。"""
+    records = _load_all_image_records()
+    return [
+        {"id": r["图片ID"], "name": r["文件名"]}
+        for r in records
+        if str(r.get("订单号", "")) == order_id
+    ]
+
+
+def get_image_bytes(file_id: str) -> bytes:
+    """从 Google Drive 下载图片字节。"""
+    service = _get_drive_service()
+    request = service.files().get_media(fileId=file_id)
+    buf = BytesIO()
+    downloader = MediaIoBaseDownload(buf, request)
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+    return buf.getvalue()
 
 
 def save_order_image(order_id: str, uploaded_file) -> str:
-    """将上传的图片保存到 IMAGE_DIR，返回保存的完整路径。"""
-    os.makedirs(IMAGE_DIR, exist_ok=True)
-    existing = list_order_images(order_id)
-    idx = len(existing) + 1
+    """将上传的图片保存到 Google Drive，并在图片索引 Sheet 中记录，返回文件 ID。"""
+    folder_id = _get_drive_folder_id()
+    service = _get_drive_service()
     ext = os.path.splitext(uploaded_file.name)[-1].lower() or ".jpg"
-    # 限制扩展名，防止意外文件类型
     if ext not in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
         ext = ".jpg"
+    existing = list_order_images(order_id)
+    idx = len(existing) + 1
     filename = f"{order_id}_{idx:03d}{ext}"
-    dest = os.path.join(IMAGE_DIR, filename)
-    with open(dest, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-    return dest
+    mime_map = {
+        ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+        ".gif": "image/gif", ".webp": "image/webp",
+    }
+    mime = mime_map.get(ext, "image/jpeg")
+    metadata = {"name": filename, "parents": [folder_id]}
+    media = MediaIoBaseUpload(
+        BytesIO(uploaded_file.getbuffer()), mimetype=mime, resumable=False
+    )
+    file_resp = service.files().create(
+        body=metadata, media_body=media, fields="id"
+    ).execute()
+    file_id = file_resp["id"]
+    ws = _get_images_ws()
+    ws.append_row([order_id, file_id, filename])
+    _invalidate_image_cache()
+    return file_id
+
+
+def delete_order_image(order_id: str, file_id: str) -> None:
+    """从 Google Drive 删除图片，并从图片索引 Sheet 中移除对应记录。"""
+    service = _get_drive_service()
+    try:
+        service.files().delete(fileId=file_id).execute()
+    except Exception:
+        pass
+    ws = _get_images_ws()
+    records = ws.get_all_records()
+    for i, r in enumerate(records):
+        if str(r.get("订单号", "")) == order_id and r.get("图片ID") == file_id:
+            ws.delete_rows(i + 2)  # +2：标题行偏移，gspread 行号从 1 起
+            break
+    _invalidate_image_cache()
 
 
 def image_count_label(order_id: str) -> str:
@@ -635,9 +776,12 @@ def page_query(df: pd.DataFrame) -> None:
                 imgs = list_order_images(row["订单号"])
                 if imgs:
                     with st.expander(f"🖼 {row['订单号']} — {row['商品名称']}  图片（{len(imgs)}张）"):
-                        for i, img_path in enumerate(imgs):
+                        for i, img_info in enumerate(imgs):
                             with st.expander(f"图片 {i+1}", expanded=False):
-                                st.image(img_path, use_container_width=True)
+                                try:
+                                    st.image(get_image_bytes(img_info["id"]), use_container_width=True)
+                                except Exception:
+                                    st.warning("图片加载失败")
 
     st.divider()
     st.markdown(
