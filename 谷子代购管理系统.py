@@ -753,35 +753,54 @@ def page_batch(df: pd.DataFrame) -> pd.DataFrame:
 
 def page_query(df: pd.DataFrame) -> None:
     st.header("🔍 自助查询我的订单")
-    st.caption("输入你的买家昵称或订单号，查看当前状态。")
 
-    keyword = st.text_input("买家昵称 或 订单号", placeholder="如：小白兔 或 ORD-20260605-XXXX")
+    SHOW_COLS = ["订单号", "买家昵称", "商品名称", "款式规格", "数量", "总价(元)", "付款状态", "发货状态", "备注"]
 
-    if keyword.strip():
-        kw = keyword.strip()
-        result = df[
-            df["买家昵称"].str.contains(kw, case=False, na=False) |
-            df["订单号"].str.upper().str.contains(kw.upper(), na=False)
-        ]
+    tab_nickname, tab_order_id = st.tabs(["👤 按买家昵称查询", "🔢 按订单号查询"])
 
-        if result.empty:
-            st.warning("😢 没有找到相关订单，请确认昵称/订单号是否正确。")
-        else:
-            SHOW_COLS = ["订单号", "商品名称", "款式规格", "数量", "总价(元)", "付款状态", "发货状态", "备注"]
-            st.success(f"找到 {len(result)} 条订单：")
-            st.dataframe(result[SHOW_COLS], use_container_width=True, hide_index=True)
+    # ── 按买家昵称查询（完全匹配） ──────────────────────────────────────────
+    with tab_nickname:
+        st.caption("请输入与下单时完全一致的昵称（区分大小写），不支持模糊搜索。")
+        nickname_kw = st.text_input("买家昵称", placeholder="如：小白兔", key="q_nickname")
+        if nickname_kw.strip():
+            result = df[df["买家昵称"] == nickname_kw.strip()]
+            if result.empty:
+                st.warning("😢 没有找到该昵称的订单，请确认昵称是否与下单时完全一致。")
+            else:
+                st.success(f"找到 {len(result)} 条订单：")
+                st.dataframe(result[SHOW_COLS], use_container_width=True, hide_index=True)
+                for _, row in result.iterrows():
+                    imgs = list_order_images(row["订单号"])
+                    if imgs:
+                        with st.expander(f"🖼 {row['订单号']} — {row['商品名称']}  图片（{len(imgs)}张）"):
+                            for i, img_info in enumerate(imgs):
+                                with st.expander(f"图片 {i+1}", expanded=False):
+                                    try:
+                                        st.image(get_image_bytes(img_info["id"]), use_container_width=True)
+                                    except Exception:
+                                        st.warning("图片加载失败")
 
-            # 展示各订单图片
-            for _, row in result.iterrows():
-                imgs = list_order_images(row["订单号"])
-                if imgs:
-                    with st.expander(f"🖼 {row['订单号']} — {row['商品名称']}  图片（{len(imgs)}张）"):
-                        for i, img_info in enumerate(imgs):
-                            with st.expander(f"图片 {i+1}", expanded=False):
-                                try:
-                                    st.image(get_image_bytes(img_info["id"]), use_container_width=True)
-                                except Exception:
-                                    st.warning("图片加载失败")
+    # ── 按订单号查询 ────────────────────────────────────────────────────────
+    with tab_order_id:
+        st.caption("请输入完整订单号，格式：ORD-YYYYMMDD-XXXXXX")
+        order_id_kw = st.text_input("订单号", placeholder="如：ORD-20260605-XXXX", key="q_orderid")
+        if order_id_kw.strip():
+            result = df[df["订单号"].str.upper() == order_id_kw.strip().upper()]
+            if result.empty:
+                st.warning("😢 没有找到该订单号，请确认是否输入正确。")
+            else:
+                st.success(f"找到 {len(result)} 条订单：")
+                st.dataframe(result[SHOW_COLS], use_container_width=True, hide_index=True)
+                for _, row in result.iterrows():
+                    imgs = list_order_images(row["订单号"])
+                    if imgs:
+                        with st.expander(f"🖼 {row['订单号']} — {row['商品名称']}  图片（{len(imgs)}张）"):
+                            for i, img_info in enumerate(imgs):
+                                with st.expander(f"图片 {i+1}", expanded=False):
+                                    try:
+                                        st.image(get_image_bytes(img_info["id"]), use_container_width=True)
+                                    except Exception:
+                                        st.warning("图片加载失败")
 
     st.divider()
     st.markdown(
